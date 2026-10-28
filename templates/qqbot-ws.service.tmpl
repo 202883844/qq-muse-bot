@@ -1,0 +1,14 @@
+[Unit]
+Description=QQ Bot WebSocket gateway (muse-qqbot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={BASE_DIR}
+ExecStart={BASE_DIR}/.venv/bin/python {BASE_DIR}/bot.py
+{PROXY_ENV_LINES}Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
