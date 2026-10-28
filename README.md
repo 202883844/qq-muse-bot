@@ -34,7 +34,7 @@ QQ 开放平台官方机器人（WebSocket 网关模式，不用 Webhook、不�
 
 ## 部署
 
-前置：已在 QQ 开放平台创建机器人并拿到 AppID / AppSecret；本机出口 IP 已加入平台 IP 白名单；
+前置：已在 QQ 开放平台创建机器人并拿到 AppID / AppSecret；**已完成沙箱配置**（新机器人默认沙箱模式：要在「开发管理 → 沙箱配置 → 在消息列表配置」里添加允许私聊的 QQ 号、成员扫码加机器人为好友，私聊才通；测试群也要登记）；本机出口 IP 已加入平台 IP 白名单；
 本机有 Python 3 和 systemd；无直连出口的环境必须有可用的代理环境变量。
 
 ```bash
@@ -61,4 +61,5 @@ systemctl enable --now qqbot-ws
 - 依赖 `qq-botpy==1.2.1` 的内部适配在 `bot.py` 的 `apply_botpy_patches()` 里，升级 botpy 前逐项复核。
 - Intents 只开 `public_messages + public_guild_messages + direct_message`；公域机器人加 `guild_messages` 会被网关以 4014 断开。
 - 被动回复有窗口期：私聊约 60 分钟，群/频道约 5 分钟，过期无法补发。
+- 群能回复、私信不回复，先查沙箱「消息列表配置」：未发布的机器人只对沙箱名单内的成员私聊有响应，名单外的消息根本不会投递；要对所有人开放需在平台提交发布审核。
 - 同一个机器人不要在两台机器同时运行。
