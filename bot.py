@@ -202,7 +202,7 @@ async def _handle(message, msg_type):
     if fast is not None:
         await _direct_reply(entry, fast)
         return
-    # 下载图片附件后入队
+    # 下载图片/视频附件后入队
     if entry["attachments"]:
         entry["media_files"] = await qc.download_media(entry["attachments"])
     path = qc.enqueue(entry)

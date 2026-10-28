@@ -310,30 +310,88 @@ async def send_media_passive(entry, data, kind, caption=""):
     return await post_passive_message(entry, body)
 
 
-async def download_media(attachments):
-    """下载消息中的图片附件到 queue/media/，返回本地路径列表。
+MAX_DOWNLOAD_VIDEO_BYTES = 200 * 1024 * 1024  # 接收视频附件上限 200 MB（流式落盘，不进内存）
+VIDEO_EXTS = {"mp4", "mov", "webm", "mkv", "avi", "m4v"}
+IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp"}
 
-    上限 15 MB；超时/失败不阻断入队，失败信息写回附件 download_error（HANDOVER 7.2）。
+
+def _classify_attachment(att):
+    """按 content_type 判定附件类型；缺失时退回看文件名后缀。返回 image/video/None。"""
+    ctype = (att.get("content_type") or "").lower()
+    if ctype.startswith("image/"):
+        return "image"
+    if ctype.startswith("video/"):
+        return "video"
+    name = (att.get("filename") or "").lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    if ext in VIDEO_EXTS:
+        return "video"
+    if ext in IMAGE_EXTS:
+        return "image"
+    return None
+
+
+async def _download_video(url, att):
+    """流式下载视频附件到 queue/media/，返回本地 Path。按魔数定后缀，识别不了则用文件名后缀。"""
+    name_hint = (att.get("filename") or "").lower()
+    hint_ext = name_hint.rsplit(".", 1)[-1] if "." in name_hint else ""
+    tmp = MEDIA_DIR / f".tmp-{uuid.uuid4().hex[:8]}"
+    total = 0
+    head = b""
+    try:
+        async with make_aiohttp_session() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                resp.raise_for_status()
+                with open(tmp, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(256 * 1024):
+                        total += len(chunk)
+                        if total > MAX_DOWNLOAD_VIDEO_BYTES:
+                            raise ValueError(f"video too large: > {MAX_DOWNLOAD_VIDEO_BYTES}")
+                        if len(head) < 16:
+                            head += chunk[: 16 - len(head)]
+                        f.write(chunk)
+        fmt = detect_video_format(head)
+        if fmt == "mp4" and hint_ext == "mov":
+            fmt = "mov"
+        if not fmt:
+            fmt = hint_ext if hint_ext in VIDEO_EXTS else "mp4"
+        name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.{fmt}"
+        path = MEDIA_DIR / name
+        tmp.rename(path)
+        return path
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+async def download_media(attachments):
+    """下载消息中的图片/视频附件到 queue/media/，返回本地路径列表。
+
+    图片上限 15 MB（整读校验魔数）；视频流式落盘、上限 200 MB。
+    超时/失败不阻断入队，失败信息写回附件 download_error（HANDOVER 7.2）。
     """
     ensure_queue_dirs()
     saved = []
     for att in attachments or []:
-        ctype = (att.get("content_type") or "")
-        if not ctype.startswith("image/"):
+        kind = _classify_attachment(att)
+        if kind is None:
             continue
         url = att.get("url")
         if not url:
             continue
         try:
-            data = await fetch_image_bytes(url)
-            if len(data) > MAX_MEDIA_BYTES:
-                raise ValueError(f"media too large: {len(data)}")
-            fmt = detect_image_format(data)
-            if not fmt:
-                raise ValueError("unsupported image format")
-            name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.{fmt}"
-            path = MEDIA_DIR / name
-            path.write_bytes(data)
+            if kind == "video":
+                path = await _download_video(url, att)
+            else:
+                data = await fetch_image_bytes(url)
+                if len(data) > MAX_MEDIA_BYTES:
+                    raise ValueError(f"media too large: {len(data)}")
+                fmt = detect_image_format(data)
+                if not fmt:
+                    raise ValueError("unsupported image format")
+                name = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.{fmt}"
+                path = MEDIA_DIR / name
+                path.write_bytes(data)
             saved.append(str(path))
         except Exception as e:  # 不阻断入队
             att["download_error"] = str(e)
